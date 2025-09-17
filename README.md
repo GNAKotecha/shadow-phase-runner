@@ -1,4 +1,3 @@
-
 # Shadow Phase Runner
 
 A fast, portrait-mode tap/drag arcade game built with React + TypeScript + Canvas.

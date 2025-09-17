@@ -1,4 +1,3 @@
-
 import React, { useEffect, useRef, useState } from "react";
 
 export default function App() {
@@ -59,7 +58,7 @@ export default function App() {
       }
     }
 
-    runTests();
+    runTests();  
 
     function spawnChunk() {
       const MIN_H = 40;
@@ -89,6 +88,7 @@ export default function App() {
     }
 
     function drawBackground(time: number) {
+      if (!ctx) return;
       ctx.fillStyle = phase === "SOLID" ? "#0b1220" : "#110b20";
       ctx.fillRect(0, 0, W, H);
       for (let i = 0; i < 10; i++) {
@@ -100,10 +100,11 @@ export default function App() {
     }
 
     function drawPlayer() {
+      if (!ctx) return;
       const p = player.current;
       ctx.beginPath();
       ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-      ctx.fillStyle = phase === "SOLID" ? "#79d0ff" : "#d079ff";
+      ctx.fillStyle = phase === "SOLID" ? "#79d0ff" : "#ff1515";
       (ctx as any).shadowColor = ctx.fillStyle as string;
       (ctx as any).shadowBlur = 18;
       ctx.fill();
@@ -111,6 +112,7 @@ export default function App() {
     }
 
     function drawBands() {
+      if (!ctx) return;
       bandsRef.current.forEach(b => {
         ctx.fillStyle = b.type === "RED" ? "#ff4a57" : "#4aa6ff";
         ctx.globalAlpha = phase === (b.type === "RED" ? "GHOST" : "SOLID") ? 0.35 : 0.9;
@@ -120,11 +122,12 @@ export default function App() {
     }
 
     function drawOrbs() {
+      if (!ctx) return;
       orbsRef.current.forEach(o => {
         if (o.taken) return;
         ctx.beginPath();
         ctx.arc(o.x, o.y, o.r, 0, Math.PI * 2);
-        ctx.fillStyle = o.type === "CYAN" ? "#6ee7ff" : "#e56eff";
+        ctx.fillStyle = o.type === "CYAN" ? "#6ee7ff" : "#e51534";
         ctx.fill();
       });
     }
@@ -155,11 +158,12 @@ export default function App() {
     }
 
     function drawUI() {
+      if (!ctx) return;
       ctx.fillStyle = "white";
       ctx.font = "bold 20px system-ui, -apple-system, Segoe UI, Roboto";
       ctx.fillText(`Score ${score}` as any, 16, 30);
       ctx.fillText(`Best ${best}` as any, 16, 56);
-      ctx.fillStyle = phase === "SOLID" ? "#79d0ff" : "#d079ff";
+      ctx.fillStyle = phase === "SOLID" ? "#79d0ff" : "#ff1515";
       ctx.fillText(phase as any, W - 110, 30);
       if (cooldown > 0 && gameState === "RUN") {
         const t = Math.min(1, cooldown / 300);
