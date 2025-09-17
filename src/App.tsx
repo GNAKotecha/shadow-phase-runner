@@ -1,14 +1,19 @@
 import React, { useEffect, useRef, useState } from "react";
+import { ensureAnonAuth, claimUsername, submitScore, fetchTop, fetchSelfRank, type LeaderboardEntry, subscribeTop, changeUsername, subscribeSelfRank, getUserBest } from './firebase.js';
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [gameState, setGameState] = useState<"MENU" | "RUN" | "GAMEOVER">("MENU");
   const [score, setScore] = useState(0);
-  const [best, setBest] = useState(() => {
-    try { return Number(localStorage.getItem("spr_best") || 0); } catch { return 0; }
-  });
+  const [best, setBest] = useState(0);
   const [phase, setPhase] = useState<"SOLID" | "GHOST">("SOLID");
   const [cooldown, setCooldown] = useState(0);
+  const [username, setUsername] = useState<string | null>(null);
+  const [liveTop, setLiveTop] = useState<LeaderboardEntry[]>([]);
+  const [selfRankLive, setSelfRankLive] = useState<{ rank: number; bestScore: number } | null>(null);
+  const [changing, setChanging] = useState(false);
+  const leaderboardRef = useRef<LeaderboardEntry[]>([]);
+  const selfRankRef = useRef<{ rank: number; bestScore: number } | null>(null);
   const rafRef = useRef(0);
   const lastRef = useRef(0);
   const dragRef = useRef({ active: false, startX: 0, startY: 0, moved: false, t0: 0 });
@@ -158,44 +163,43 @@ export default function App() {
     }
 
     function drawUI() {
+      const ctx = canvasRef.current?.getContext('2d');
       if (!ctx) return;
       ctx.fillStyle = "white";
       ctx.font = "bold 20px system-ui, -apple-system, Segoe UI, Roboto";
       ctx.fillText(`Score ${score}` as any, 16, 30);
       ctx.fillText(`Best ${best}` as any, 16, 56);
       ctx.fillStyle = phase === "SOLID" ? "#79d0ff" : "#ff1515";
-      ctx.fillText(phase as any, W - 110, 30);
+      ctx.fillText(phase as any, 420 - 110, 30);
       if (cooldown > 0 && gameState === "RUN") {
         const t = Math.min(1, cooldown / 300);
         ctx.fillStyle = "rgba(255,255,255,0.2)";
-        ctx.fillRect(W - 150, 40, 120, 10);
+        ctx.fillRect(420 - 150, 40, 120, 10);
         ctx.fillStyle = "white";
-        ctx.fillRect(W - 150, 40, 120 * (1 - t), 10);
+        ctx.fillRect(420 - 150, 40, 120 * (1 - t), 10);
       }
       if (gameState === "MENU") {
-        ctx.fillStyle = "rgba(0,0,0,0.5)";
-        ctx.fillRect(0, 0, W, H);
-        ctx.fillStyle = "white";
-        ctx.textAlign = "center";
-        ctx.font = "bold 34px system-ui, -apple-system, Segoe UI, Roboto";
-        ctx.fillText("Shadow Phase Runner" as any, W / 2, H / 2 - 80);
-        ctx.font = "20px system-ui, -apple-system, Segoe UI, Roboto";
-        ctx.fillText(`Best ${best}` as any, W / 2, H / 2 - 42);
-        ctx.fillText("Tap to start • Drag to move" as any, W / 2, H / 2);
-        ctx.fillText("Tap/Space to phase" as any, W / 2, H / 2 + 26);
-        ctx.textAlign = "start";
+        ctx.fillStyle = "rgba(0,0,0,0.55)";
+        ctx.fillRect(0,0,420,720);
+        ctx.fillStyle = 'white';
+        ctx.textAlign = 'center';
+        ctx.font = 'bold 32px system-ui, -apple-system, Segoe UI, Roboto';
+        ctx.fillText('Tap to Start' as any, 210, 330);
+        ctx.font = '18px system-ui, -apple-system, Segoe UI, Roboto';
+        ctx.fillText('Drag to move • Tap/Space to phase' as any, 210, 366);
+        ctx.textAlign = 'start';
       }
       if (gameState === "GAMEOVER") {
-        ctx.fillStyle = "rgba(0,0,0,0.5)";
-        ctx.fillRect(0, 0, W, H);
-        ctx.fillStyle = "white";
-        ctx.textAlign = "center";
-        ctx.font = "bold 36px system-ui, -apple-system, Segoe UI, Roboto";
-        ctx.fillText("Game Over" as any, W / 2, H / 2 - 20);
-        ctx.font = "20px system-ui, -apple-system, Segoe UI, Roboto";
-        ctx.fillText(`Score ${score} • Best ${best}` as any, W / 2, H / 2 + 10);
-        ctx.fillText("Tap to restart" as any, W / 2, H / 2 + 40);
-        ctx.textAlign = "start";
+        ctx.fillStyle = "rgba(0,0,0,0.55)";
+        ctx.fillRect(0,0,420,720);
+        ctx.fillStyle = 'white';
+        ctx.textAlign = 'center';
+        ctx.font = 'bold 34px system-ui, -apple-system, Segoe UI, Roboto';
+        ctx.fillText('Game Over' as any, 210, 320);
+        ctx.font = '18px system-ui, -apple-system, Segoe UI, Roboto';
+        ctx.fillText(`Score ${score} • Best ${best}` as any, 210, 352);
+        ctx.fillText('Tap to restart' as any, 210, 382);
+        ctx.textAlign = 'start';
       }
     }
 
@@ -234,6 +238,62 @@ export default function App() {
     rafRef.current = requestAnimationFrame(step as any);
     return () => cancelAnimationFrame(rafRef.current);
   }, [gameState, phase, cooldown, score, best]);
+
+  // Firebase: claim username once & load initial leaderboard
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        await ensureAnonAuth();
+        const uname = await claimUsername((msg: string) => prompt(msg));
+        if (!mounted) return;
+        setUsername(uname);
+        const b = await getUserBest();
+        if (mounted) setBest(b);
+        refreshLeaderboard();
+      } catch (e) { /* ignore */ }
+    })();
+    return () => { mounted = false; };
+  }, []);
+
+  useEffect(() => {
+    const unsub = subscribeTop(10, (entries: LeaderboardEntry[]) => setLiveTop(entries));
+    return () => unsub();
+  }, []);
+  useEffect(() => {
+    subscribeSelfRank(r => setSelfRankLive(r));
+  }, []);
+
+  function refreshLeaderboard() {
+    fetchTop().then((ls: LeaderboardEntry[]) => { leaderboardRef.current = ls; });
+    fetchSelfRank().then((r: { rank: number; bestScore: number } | null) => { selfRankRef.current = r; if (r && r.bestScore > best) setBest(r.bestScore); });
+  }
+
+  // On game over submit score & refresh board
+  useEffect(() => {
+    if (gameState === 'GAMEOVER') {
+      submitScore(score).then(updated => {
+        if (typeof updated === 'number') setBest(updated);
+        refreshLeaderboard();
+      });
+    }
+  }, [gameState, score]);
+
+  async function onChangeUsername() {
+    if (changing) return;
+    setChanging(true);
+    try {
+      const raw = prompt('New username (a-z 0-9 _):');
+      if (!raw) return;
+      const ok = await changeUsername(raw);
+      if (!ok) alert('Name taken or invalid (min 3 chars).');
+      else {
+        const stored = localStorage.getItem('spr_username');
+        setUsername(stored || null);
+        refreshLeaderboard();
+      }
+    } finally { setChanging(false); }
+  }
 
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
@@ -299,12 +359,41 @@ export default function App() {
   }, [gameState, cooldown]);
 
   return (
-    <div className="container">
-      <div className="text-center" style={{position:'absolute', top: 8, left:0, right:0}}>
-        <h1 style={{fontSize: '20px', margin: 0}}>Shadow Phase Runner</h1>
-        <p style={{opacity: 0.8, margin: 0}}>Tap to phase • Drag to move (portrait)</p>
+    <div className="container" style={{display:'flex', flexDirection:'row', justifyContent:'center', gap:32, alignItems:'flex-start', padding:16}}>
+      <aside style={{width:240, fontFamily:'system-ui,-apple-system,Segoe UI,Roboto', color:'#fff'}}>
+        <h1 style={{fontSize:22, margin:'0 0 8px'}}>Shadow Phase Runner</h1>
+        <div style={{fontSize:13, lineHeight:'1.4', opacity:0.9, marginBottom:12}}>
+          <div>Tap / Space: phase</div>
+          <div>Drag: move</div>
+          <div>Collect orbs, avoid wrong phase</div>
+        </div>
+        <div style={{fontSize:13, marginBottom:8, opacity:0.85}}>
+          {username ? `You: ${username}` : 'Claiming username...'} {selfRankLive && `• Rank #${selfRankLive.rank}`}
+        </div>
+        <button onClick={onChangeUsername} disabled={changing} style={{fontSize:12, padding:'4px 10px', cursor:'pointer', borderRadius:4, border:'1px solid #555', background:'#1e1e1e', color:'#fff'}}>Change Name</button>
+        <div style={{marginTop:24, fontSize:12, opacity:0.6}}>High Score: {best}</div>
+      </aside>
+      <div style={{position:'relative'}}>
+        <canvas ref={canvasRef} width={W} height={H} style={{borderRadius: 16, boxShadow:'0 8px 30px rgba(0,0,0,0.35)', border:'1px solid rgba(255,255,255,0.1)'}} />
       </div>
-      <canvas ref={canvasRef} width={W} height={H} style={{borderRadius: 16, boxShadow:'0 8px 30px rgba(0,0,0,0.35)', border:'1px solid rgba(255,255,255,0.1)'}} />
+      <aside style={{width:240, fontFamily:'system-ui, -apple-system, Segoe UI, Roboto', color:'#fff', position:'sticky', top:16}}>
+        <h2 style={{fontSize:20, margin:'0 0 12px'}}>Top 10</h2>
+        <ol style={{listStyle:'none', padding:0, margin:0, fontSize:14, lineHeight:'1.5em'}}>
+          {liveTop.length === 0 && <li style={{opacity:0.6}}>{username? 'No scores yet (play!)':'Loading...'}</li>}
+          {liveTop.map((e,i) => (
+            <li key={e.username} style={{display:'flex', justifyContent:'space-between', background:'rgba(255,255,255,0.05)', padding:'3px 8px', borderRadius:4, marginBottom:4, border: username===e.username? '1px solid #fff':'1px solid transparent'}}>
+              <span>{i+1}. {e.username}</span>
+              <span style={{opacity:0.85}}>{e.bestScore}</span>
+            </li>
+          ))}
+        </ol>
+        {selfRankLive && selfRankLive.rank > 10 && (
+          <div style={{marginTop:12, fontSize:12, opacity:0.85}}>Your Rank: #{selfRankLive.rank} • Best {selfRankLive.bestScore}</div>
+        )}
+        {username && !liveTop.find(e=>e.username===username) && liveTop.length>0 && (
+          <div style={{marginTop:8, fontSize:12, opacity:0.65}}>Score more to enter Top 10!</div>
+        )}
+      </aside>
     </div>
   );
 }
