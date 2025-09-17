@@ -221,10 +221,13 @@ export async function changeUsername(newNameRaw: string): Promise<boolean> {
 }
 
 export function subscribeSelfRank(cb: (r: { rank: number; bestScore: number } | null) => void) {
+  let innerUnsub: (() => void) | null = null;
+  let cancelled = false;
   ensureAnonAuth().then(() => {
+    if (cancelled) return;
     const uid = getAuth().currentUser!.uid;
     const userRef = doc(getFirestore(), 'users', uid);
-    return onSnapshot(userRef, async snap => {
+    innerUnsub = onSnapshot(userRef, async snap => {
       if (!snap.exists()) { cb(null); return; }
       const myScore = (snap.data() as any).bestScore || 0;
       const higherQ = query(collection(getFirestore(), 'users'), where('bestScore', '>', myScore));
@@ -244,6 +247,5 @@ export function subscribeSelfRank(cb: (r: { rank: number; bestScore: number } | 
     console.error('[FB] subscribeSelfRank ensure auth failed', e);
     cb(null);
   });
-  // Return noop unsubscribe placeholder (the real unsubscribe is returned asynchronously, user can manage if needed)
-  return () => {};
+  return () => { cancelled = true; if (innerUnsub) try { innerUnsub(); } catch {} };
 }

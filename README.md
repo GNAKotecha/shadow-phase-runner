@@ -7,8 +7,9 @@ A fast, portrait-mode tap/drag arcade game built with React + TypeScript + Canva
 - **Drag** to move horizontally
 - Random **RED/BLUE** lane bands with guardrails on height
 - Always-spawned phase-orb between bands to signal required phase
-- Score ramp + local **high score** (localStorage)
-- Zero dependencies beyond React & Vite
+- Global **Firebase-backed leaderboard** (top 10 + personal rank)
+- Anonymous auth + username claim (no password)
+- Persistent best score stored in Firestore (no localStorage fallback)
 
 ## Requirements
 - Node.js 18+ and npm
@@ -16,6 +17,9 @@ A fast, portrait-mode tap/drag arcade game built with React + TypeScript + Canva
 ## Quickstart (Local Development)
 ```bash
 npm install
+# copy env template
+cp .env.example .env
+# fill in Firebase values in .env (see below)
 npm run dev
 ```
 Open the printed URL (typically http://localhost:5173).
@@ -28,39 +32,104 @@ npm run preview
 `npm run preview` serves the production build on a local static server.
 
 ## Deploying
-**Vercel**: Import the repo → Framework: Vite → Build Command: `npm run build` → Output: `dist/`  
-**Netlify**: Build Command: `npm run build` → Publish directory: `dist/`  
-**GitHub Pages**: Build (`npm run build`), then push `dist/` to `gh-pages` branch or use an action that publishes `dist/`.
+**GitHub Pages**: Already automated via GitHub Action on pushes to `main`.
+**Vercel/Netlify**: Use `npm run build` and publish `dist/`.
 
-## Deploy (GitHub Pages via Actions)
-Already configured.
-1. Ensure repo name matches the base in `vite.config.ts` (currently `/shadow-phase-runner/`).
-2. Push to `main`. The `Deploy to GitHub Pages` workflow builds and publishes automatically.
-3. In GitHub: Settings → Pages → Build and deployment: select `GitHub Actions` (first time only).
-4. Site will be available at `https://<your-username>.github.io/shadow-phase-runner/`.
-5. If you rename the repo update `base` in `vite.config.ts`.
+## GitHub Pages Deployment
+1. Ensure repo name matches the `base` in `vite.config.ts` (currently `/shadow-phase-runner/`).
+2. Push to `main`. Action builds & deploys to Pages. 
+3. GitHub Settings → Pages → Ensure Source = GitHub Actions (first time only).
+4. Site: `https://<your-username>.github.io/shadow-phase-runner/`.
+5. Custom domain: add CNAME in Pages settings, then add domain(s) to Firebase Auth (see below).
 
-## Project Structure
+## Firebase Setup
+1. Firebase Console → Create project → Add Web App (do NOT enable hosting if using GitHub Pages).
+2. Copy the web config values into `.env` (see template). Optionally also fill `src/firebaseConfig.ts` for fallback public build.
+3. Enable Authentication → Sign-in method → Anonymous (ON).
+4. Add Authorized Domains: `localhost`, `127.0.0.1`, `<your-username>.github.io`, your custom domain(s).
+5. Firestore → Create database → Production mode.
+6. Rules: paste the rules below and Publish.
+
+### Firestore Rules (basic)
 ```
-shadow-phase-runner/
-├─ public/               # static assets
-├─ src/
-│  ├─ App.tsx            # the game
-│  ├─ index.css
-│  └─ main.tsx
-├─ index.html
-├─ package.json
-├─ tsconfig.json
-├─ tsconfig.node.json
-└─ vite.config.ts
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{db}/documents {
+    function authed() { return request.auth != null; }
+
+    match /users/{uid} {
+      allow read: if true; // public leaderboard
+      allow create: if authed() && request.auth.uid == uid;
+      allow update: if authed() && request.auth.uid == uid;
+      allow delete: if false;
+    }
+
+    match /usernames/{uname} {
+      allow read: if true;
+      allow create: if authed()
+        && request.resource.data.keys().hasOnly(['uid'])
+        && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    match /{other=**} { allow read, write: if false; }
+  }
+}
 ```
+
+### Environment Variables (.env)
+Copy `.env.example` to `.env` and fill:
+```
+VITE_FIREBASE_API_KEY=...
+VITE_FIREBASE_AUTH_DOMAIN=...
+VITE_FIREBASE_PROJECT_ID=...
+VITE_FIREBASE_APP_ID=...
+VITE_FIREBASE_MESSAGING_SENDER_ID=...
+VITE_FIREBASE_STORAGE_BUCKET=...
+VITE_FIREBASE_MEASUREMENT_ID=...
+```
+These are public client config values (not secrets) but keep them out of version control if you prefer. The build injects them at compile time.
+
+### GitHub Actions Secrets
+Add the same keys (without surrounding quotes) in Repo Settings → Secrets → Actions:
+- `VITE_FIREBASE_API_KEY`
+- `VITE_FIREBASE_AUTH_DOMAIN`
+- `VITE_FIREBASE_PROJECT_ID`
+- `VITE_FIREBASE_APP_ID`
+- `VITE_FIREBASE_MESSAGING_SENDER_ID`
+- `VITE_FIREBASE_STORAGE_BUCKET`
+- `VITE_FIREBASE_MEASUREMENT_ID` (optional)
+
+The workflow (`.github/workflows/pages.yml`) exports them to the build step.
+
+### Username & Scores
+- User signs in anonymously.
+- User claims a unique lowercase username (stored in `usernames/{uname}` mapping doc and `users/{uid}` document).
+- Score updates only write if higher than previous `bestScore`.
+- Leaderboard query: top 10 by `bestScore desc`.
+- Personal rank uses a `count()` aggregation of higher scores.
+
+### Changing Username
+`Change Name` button executes a transaction to reserve new username. Old username document remains (could be cleaned with a Cloud Function if desired).
 
 ## Development Notes
-- The game uses a single `useEffect` loop for render/update and a second for input.
-- `spawnChunk()` randomizes band color with `rng <= 0.5 ? RED : BLUE` and height clamped between `40..240` pixels.
-- Orbs are spawned between bands and match the required upcoming phase.
+- Game loop + rendering all in a single `requestAnimationFrame` effect.
+- Removed localStorage best score writes; Firestore is source of truth.
+- NodeNext module resolution requires explicit `.js` in relative imports (`import App from './App.js'`).
 
-## Optional: Docker
+## Testing Checklist
+- Username claim works and persists across reload.
+- Game Over updates Firestore `bestScore` when higher.
+- Leaderboard updates live across two browser windows.
+- Rank updates after scoring higher.
+- GitHub Action build passes with env vars populated.
+
+## Optional Improvements
+- Secondary sort by `updatedAt` for tie-breaking.
+- Offline indicator when Firestore calls fail.
+- Cloud Function cleanup for abandoned username docs.
+
+## Docker (Optional)
 ```Dockerfile
 FROM node:20-alpine
 WORKDIR /app

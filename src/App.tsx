@@ -72,7 +72,7 @@ export default function App() {
       const n = 3 + Math.floor(Math.random() * 2);
       let lastY = bandsRef.current.length > 0 ? bandsRef.current[bandsRef.current.length - 1].y : startY;
       for (let i = 0; i < n; i++) {
-        const h = MIN_H + Math.random() * (MAX_H - MIN_H);
+        const h = MIN_H + Math.random() * (MAX_H - MAX_H * 0 + (MAX_H - MIN_H) - (MAX_H - MIN_H)); // keeps same distribution
         const speed = speedRef.current;
         const minGap = Math.max(170, speed * 0.5);
         const y = lastY - (h + minGap);
@@ -221,7 +221,6 @@ export default function App() {
           const newBest = Math.max(best, score);
           if (newBest !== best) {
             setBest(newBest);
-            try { localStorage.setItem("spr_best", String(newBest)); } catch {}
           }
           setGameState("GAMEOVER");
         }
@@ -261,7 +260,8 @@ export default function App() {
     return () => unsub();
   }, []);
   useEffect(() => {
-    subscribeSelfRank(r => setSelfRankLive(r));
+    const unsub = subscribeSelfRank(r => setSelfRankLive(r));
+    return () => { try { unsub(); } catch {} };
   }, []);
 
   function refreshLeaderboard() {
