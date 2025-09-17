@@ -1,18 +1,19 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously } from 'firebase/auth';
 import { getFirestore, doc, getDoc, runTransaction, collection, query, orderBy, limit, getDocs, updateDoc, where, Transaction, QueryDocumentSnapshot, onSnapshot, getCountFromServer } from 'firebase/firestore';
+import { firebasePublicConfig } from './firebaseConfig.js';
 
 // When using NodeNext module resolution, .js extensions are required in import paths from TS files.
 // The consuming files import this as './firebase.js'.
 
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || firebasePublicConfig.apiKey,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || firebasePublicConfig.authDomain,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || firebasePublicConfig.projectId,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || firebasePublicConfig.appId,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || firebasePublicConfig.messagingSenderId,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || firebasePublicConfig.storageBucket,
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || firebasePublicConfig.measurementId,
 };
 
 console.log('[FB] Raw config loaded', {
