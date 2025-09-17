@@ -40,8 +40,46 @@ export async function ensureAnonAuth() {
   return auth.currentUser!;
 }
 
-function sanitizeUsername(raw: string) {
+export function sanitizeUsername(raw: string) {
   return raw.toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 12);
+}
+
+export async function registerUsername(uname: string, uid: string) {
+  const cleaned = sanitizeUsername(uname);
+  if (cleaned.length < 3) return false;
+  const unameRef = doc(db, 'usernames', cleaned);
+  const userRef = doc(db, 'users', uid);
+  try {
+    await runTransaction(db, async (trx: Transaction) => {
+      const unameSnap = await trx.get(unameRef);
+      if (unameSnap.exists()) throw new Error('taken');
+      trx.set(unameRef, { uid });
+      trx.set(userRef, { username: cleaned, bestScore: 0, createdAt: Date.now(), updatedAt: Date.now() });
+    });
+    localStorage.setItem('spr_username', cleaned);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+export async function validateCachedUsername(uname: string): Promise<boolean> {
+  try {
+    await ensureAnonAuth();
+    const cleaned = sanitizeUsername(uname);
+    if (!cleaned) return false;
+    const uid = auth.currentUser!.uid;
+    const unameRef = doc(db, 'usernames', cleaned);
+    const userRef = doc(db, 'users', uid);
+    const [unameSnap, userSnap] = await Promise.all([getDoc(unameRef), getDoc(userRef)]);
+    if (!unameSnap.exists() || !userSnap.exists()) return false;
+    const data: any = unameSnap.data();
+    if (data.uid !== uid) return false;
+    const udata: any = userSnap.data();
+    return udata && udata.username === cleaned;
+  } catch {
+    return false;
+  }
 }
 
 export async function claimUsername(promptFn: (p: string) => Promise<string | null> | string | null) {
@@ -59,7 +97,7 @@ export async function claimUsername(promptFn: (p: string) => Promise<string | nu
         return stored;
       } else {
         console.warn('[FB] Cached username not backed by Firestore docs, attempting re-registration');
-        const ok = await tryRegisterUsername(stored, uid);
+        const ok = await registerUsername(stored, uid);
         if (ok) { console.log('[FB] Re-registered cached username'); return stored; }
         console.warn('[FB] Re-registration failed; clearing cached username');
         localStorage.removeItem('spr_username');
@@ -75,30 +113,13 @@ export async function claimUsername(promptFn: (p: string) => Promise<string | nu
     if (!input) { console.warn('[FB] Empty username input, re-prompt'); continue; }
     const uname = sanitizeUsername(input);
     if (uname.length < 3) { console.warn('[FB] Username too short', uname); continue; }
-    const success = await tryRegisterUsername(uname, uid);
+    const success = await registerUsername(uname, uid);
     if (success) {
       localStorage.setItem('spr_username', uname);
       console.log('[FB] Username registered =>', uname);
       return uname;
     }
     console.warn('[FB] Username taken, retry', uname);
-  }
-}
-
-async function tryRegisterUsername(uname: string, uid: string) {
-  const unameRef = doc(db, 'usernames', uname);
-  const userRef = doc(db, 'users', uid);
-  try {
-    await runTransaction(db, async (trx: Transaction) => {
-      const unameSnap = await trx.get(unameRef);
-      if (unameSnap.exists()) throw new Error('taken');
-      trx.set(unameRef, { uid });
-      trx.set(userRef, { username: uname, bestScore: 0, createdAt: Date.now(), updatedAt: Date.now() });
-    });
-    return true;
-  } catch (e) {
-    console.error('[FB] tryRegisterUsername failed', { uname, e });
-    return false;
   }
 }
 
