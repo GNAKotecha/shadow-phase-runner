@@ -32,6 +32,14 @@ npm run preview
 **Netlify**: Build Command: `npm run build` → Publish directory: `dist/`  
 **GitHub Pages**: Build (`npm run build`), then push `dist/` to `gh-pages` branch or use an action that publishes `dist/`.
 
+## Deploy (GitHub Pages via Actions)
+Already configured.
+1. Ensure repo name matches the base in `vite.config.ts` (currently `/shadow-phase-runner/`).
+2. Push to `main`. The `Deploy to GitHub Pages` workflow builds and publishes automatically.
+3. In GitHub: Settings → Pages → Build and deployment: select `GitHub Actions` (first time only).
+4. Site will be available at `https://<your-username>.github.io/shadow-phase-runner/`.
+5. If you rename the repo update `base` in `vite.config.ts`.
+
 ## Project Structure
 ```
 shadow-phase-runner/
