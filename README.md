@@ -5,11 +5,15 @@ A fast, portrait-mode tap/drag arcade game built with React + TypeScript + Canva
 ## Features
 - Tap or Space to **phase** between SOLID and GHOST
 - **Drag** to move horizontally
-- Random **RED/BLUE** lane bands with guardrails on height
-- Always-spawned phase-orb between bands to signal required phase
+- Dynamic obstacle system with multiple obstacle archetypes (RectBand, Gate, ZigZag, MovingWindow, SplitRail, StaggeredBars)
+- Weighted + progressive unlock logic (score & obstacle count thresholds)
+- Fairness guardrails (cooldown-aware spacing, flip variety enforcement, spawn retry loop)
+- Orbs require matching phase and reward score (phase reinforcing)
 - Global **Firebase-backed leaderboard** (top 10 + personal rank)
 - Anonymous auth + username claim (no password)
 - Persistent best score stored in Firestore (no localStorage fallback)
+- Per-run randomized neon phase color pair (player + orbs); background/UI stay dark
+- Pure runtime randomness (seeded RNG removed to keep focus on play feel)
 
 ## Requirements
 - Node.js 18+ and npm
@@ -114,8 +118,9 @@ The workflow (`.github/workflows/pages.yml`) exports them to the build step.
 
 ## Development Notes
 - Game loop + rendering all in a single `requestAnimationFrame` effect.
+- Obstacle system uses registry + weighted random selection with fairness retries (pure Math.random now, seeded mode removed).
 - Removed localStorage best score writes; Firestore is source of truth.
-- NodeNext module resolution requires explicit `.js` in relative imports (`import App from './App.js'`).
+- NodeNext module resolution requires explicit `.js` in relative imports.
 
 ## Testing Checklist
 - Username claim works and persists across reload.
@@ -123,11 +128,13 @@ The workflow (`.github/workflows/pages.yml`) exports them to the build step.
 - Leaderboard updates live across two browser windows.
 - Rank updates after scoring higher.
 - GitHub Action build passes with env vars populated.
+- Obstacle progression unlocks over time (verify different archetypes appear as score climbs).
 
 ## Optional Improvements
 - Secondary sort by `updatedAt` for tie-breaking.
 - Offline indicator when Firestore calls fail.
 - Cloud Function cleanup for abandoned username docs.
+- Difficulty smoothing / late-game speed tuning.
 
 ## Docker (Optional)
 ```Dockerfile
