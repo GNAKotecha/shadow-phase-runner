@@ -74,6 +74,14 @@ export function createObstacleSystem(
     }
   }
 
+  // Consistent spacing function for all obstacles
+  function calculateObstacleSpacing(obstacleHeight: number = 80): number {
+    // Same logic as RectBands: minimum gap of 170, with additional height consideration
+    const baseGap = Math.max(170, 260 * 0.5); // 170 minimum
+    const heightAdjustment = obstacleHeight > 80 ? (obstacleHeight - 80) * 0.5 : 0;
+    return baseGap + heightAdjustment;
+  }
+
   // Original RectBand logic (UNCHANGED except for guardrail)
   function spawnRectBand() {
     const gap = Math.max(170, 260 * 0.5); // Keep original spacing
@@ -116,7 +124,9 @@ export function createObstacleSystem(
     const gatePhase = pickPhaseWithGuardrail();
     trackBandPhase(gatePhase);
     
-    const y = lastTopY - 120;
+    const obstacleHeight = 80;
+    const spacing = calculateObstacleSpacing(obstacleHeight);
+    const y = lastTopY - spacing;
     const gapWidth = 100;
     const gapX = (W - gapWidth) / 2; // Center the gap
     
@@ -175,7 +185,9 @@ export function createObstacleSystem(
     const phase2 = phase1 === "SOLID" ? "GHOST" : "SOLID";
     trackBandPhase(phase2);
     
-    const y = lastTopY - 140;
+    const obstacleHeight = 60; // Total height of zigzag (30 + 30)
+    const spacing = calculateObstacleSpacing(obstacleHeight);
+    const y = lastTopY - spacing;
     
     // Left barrier
     bandsRef.current.push({
@@ -232,7 +244,9 @@ export function createObstacleSystem(
     const railPhase = pickPhaseWithGuardrail();
     trackBandPhase(railPhase);
     
-    const y = lastTopY - 120;
+    const obstacleHeight = 120; // 20 + 80 gap + 20 = total coverage
+    const spacing = calculateObstacleSpacing(obstacleHeight);
+    const y = lastTopY - spacing;
     const gap = 80;
     
     // Top rail
@@ -275,7 +289,9 @@ export function createObstacleSystem(
     const barPhase = pickPhaseWithGuardrail();
     trackBandPhase(barPhase);
     
-    const y = lastTopY - 160;
+    const obstacleHeight = 160; // Total height of staggered pattern
+    const spacing = calculateObstacleSpacing(obstacleHeight);
+    const y = lastTopY - spacing;
     const numBars = 3;
     
     for (let i = 0; i < numBars; i++) {
@@ -319,7 +335,9 @@ export function createObstacleSystem(
     const windowPhase = pickPhaseWithGuardrail();
     trackBandPhase(windowPhase);
     
-    const y = lastTopY - 120;
+    const obstacleHeight = 80;
+    const spacing = calculateObstacleSpacing(obstacleHeight);
+    const y = lastTopY - spacing;
     const windowWidth = 100;
     const windowX = Math.random() * (W - windowWidth);
     
@@ -372,7 +390,9 @@ export function createObstacleSystem(
     const gatePhase = pickPhaseWithGuardrail();
     trackBandPhase(gatePhase);
     
-    const y = lastTopY - 120;
+    const obstacleHeight = 80;
+    const spacing = calculateObstacleSpacing(obstacleHeight);
+    const y = lastTopY - spacing;
     const gapWidth = 80;
     const gapX = (W - gapWidth) / 2; // Center the gap
     
@@ -430,7 +450,9 @@ export function createObstacleSystem(
     const barrierPhase = pickPhaseWithGuardrail();
     trackBandPhase(barrierPhase);
     
-    const y = lastTopY - 120;
+    const obstacleHeight = 60;
+    const spacing = calculateObstacleSpacing(obstacleHeight);
+    const y = lastTopY - spacing;
     const barrierWidth = 120;
     const moveRange = { min: 0, max: W };
     const startX = Math.random() * (W - barrierWidth);
@@ -471,7 +493,9 @@ export function createObstacleSystem(
 
   // NeutralMaze: Mix of neutral and colored barriers creating a maze
   function spawnNeutralMaze() {
-    const y = lastTopY - 160;
+    const obstacleHeight = 105; // 25 + 25 + 25 + gaps = total coverage
+    const spacing = calculateObstacleSpacing(obstacleHeight);
+    const y = lastTopY - spacing;
     const phase1 = pickPhaseWithGuardrail();
     trackBandPhase(phase1);
     
@@ -554,7 +578,9 @@ export function createObstacleSystem(
     const gatePhase = pickPhaseWithGuardrail();
     trackBandPhase(gatePhase);
     
-    const y = lastTopY - 120;
+    const obstacleHeight = 80;
+    const spacing = calculateObstacleSpacing(obstacleHeight);
+    const y = lastTopY - spacing;
     const gapWidth = 100;
     const wallHeight = 80;
     const linkId = `bouncing-gate-${obstacleCount}`;

@@ -1,6 +1,19 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously } from 'firebase/auth';
-import { getFirestore, doc, getDoc, runTransaction, collection, query, orderBy, limit, getDocs, updateDoc, where, Transaction, QueryDocumentSnapshot, onSnapshot, getCountFromServer } from 'firebase/firestore';
+import { 
+  getAuth, 
+  signInAnonymously, 
+  GoogleAuthProvider, 
+  OAuthProvider, 
+  signInWithPopup, 
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  sendPasswordResetEmail,
+  updateProfile,
+  signOut,
+  User,
+  UserCredential
+} from 'firebase/auth';
+import { getFirestore, doc, getDoc, runTransaction, collection, query, orderBy, limit, getDocs, updateDoc, where, Transaction, QueryDocumentSnapshot, onSnapshot, getCountFromServer, setDoc } from 'firebase/firestore';
 import { firebasePublicConfig } from './firebaseConfig.js';
 
 // When using NodeNext module resolution, .js extensions are required in import paths from TS files.
@@ -38,6 +51,268 @@ export async function ensureAnonAuth() {
     }
   }
   return auth.currentUser!;
+}
+
+// Enhanced Authentication Methods
+
+export interface AuthResult {
+  user: User;
+  isNewUser: boolean;
+  credential?: UserCredential;
+}
+
+// Google Sign-In
+export async function signInWithGoogle(): Promise<AuthResult> {
+  console.log('[AUTH] Starting Google Sign-In...');
+  const provider = new GoogleAuthProvider();
+  provider.addScope('profile');
+  provider.addScope('email');
+  
+  try {
+    const result = await signInWithPopup(auth, provider);
+    console.log('[AUTH] Google Sign-In success:', result.user.uid);
+    
+    // Check if user exists in our system
+    const userRef = doc(db, 'users', result.user.uid);
+    const userSnap = await getDoc(userRef);
+    const isNewUser = !userSnap.exists();
+    
+    if (isNewUser) {
+      // Create user profile for new Google users
+      const displayName = result.user.displayName || result.user.email?.split('@')[0] || 'Player';
+      const username = sanitizeUsername(displayName);
+      await createUserProfile(result.user.uid, {
+        username: username,
+        email: result.user.email,
+        displayName: result.user.displayName,
+        photoURL: result.user.photoURL,
+        provider: 'google'
+      });
+    }
+    
+    return { user: result.user, isNewUser, credential: result };
+  } catch (error) {
+    console.error('[AUTH] Google Sign-In failed:', error);
+    throw error;
+  }
+}
+
+// Apple Sign-In
+export async function signInWithApple(): Promise<AuthResult> {
+  console.log('[AUTH] Starting Apple Sign-In...');
+  const provider = new OAuthProvider('apple.com');
+  provider.addScope('email');
+  provider.addScope('name');
+  
+  try {
+    const result = await signInWithPopup(auth, provider);
+    console.log('[AUTH] Apple Sign-In success:', result.user.uid);
+    
+    // Check if user exists in our system
+    const userRef = doc(db, 'users', result.user.uid);
+    const userSnap = await getDoc(userRef);
+    const isNewUser = !userSnap.exists();
+    
+    if (isNewUser) {
+      // Create user profile for new Apple users
+      const displayName = result.user.displayName || result.user.email?.split('@')[0] || 'Player';
+      const username = sanitizeUsername(displayName);
+      await createUserProfile(result.user.uid, {
+        username: username,
+        email: result.user.email,
+        displayName: result.user.displayName,
+        photoURL: result.user.photoURL,
+        provider: 'apple'
+      });
+    }
+    
+    return { user: result.user, isNewUser, credential: result };
+  } catch (error) {
+    console.error('[AUTH] Apple Sign-In failed:', error);
+    throw error;
+  }
+}
+
+// Email/Password Registration
+export async function signUpWithEmail(email: string, password: string, displayName: string): Promise<AuthResult> {
+  console.log('[AUTH] Starting email registration for:', email);
+  
+  try {
+    const result = await createUserWithEmailAndPassword(auth, email, password);
+    console.log('[AUTH] Email registration success:', result.user.uid);
+    
+    // Update user profile with display name
+    if (displayName) {
+      await updateProfile(result.user, { displayName });
+    }
+    
+    // Create user profile in Firestore
+    const username = sanitizeUsername(displayName || email.split('@')[0]);
+    await createUserProfile(result.user.uid, {
+      username: username,
+      email: email,
+      displayName: displayName,
+      provider: 'email'
+    });
+    
+    return { user: result.user, isNewUser: true, credential: result };
+  } catch (error) {
+    console.error('[AUTH] Email registration failed:', error);
+    throw error;
+  }
+}
+
+// Email/Password Sign-In
+export async function signInWithEmail(email: string, password: string): Promise<AuthResult> {
+  console.log('[AUTH] Starting email sign-in for:', email);
+  
+  try {
+    const result = await signInWithEmailAndPassword(auth, email, password);
+    console.log('[AUTH] Email sign-in success:', result.user.uid);
+    
+    // Check if user profile exists
+    const userRef = doc(db, 'users', result.user.uid);
+    const userSnap = await getDoc(userRef);
+    const isNewUser = !userSnap.exists();
+    
+    return { user: result.user, isNewUser, credential: result };
+  } catch (error) {
+    console.error('[AUTH] Email sign-in failed:', error);
+    throw error;
+  }
+}
+
+// Password Reset
+export async function resetPassword(email: string): Promise<void> {
+  console.log('[AUTH] Sending password reset email to:', email);
+  
+  try {
+    await sendPasswordResetEmail(auth, email);
+    console.log('[AUTH] Password reset email sent successfully');
+  } catch (error) {
+    console.error('[AUTH] Password reset failed:', error);
+    throw error;
+  }
+}
+
+// Sign Out
+export async function signOutUser(): Promise<void> {
+  console.log('[AUTH] Signing out user');
+  
+  try {
+    await signOut(auth);
+    console.log('[AUTH] Sign out successful');
+    // Clear local storage
+    localStorage.removeItem('spr_username');
+  } catch (error) {
+    console.error('[AUTH] Sign out failed:', error);
+    throw error;
+  }
+}
+
+// Create user profile in Firestore
+async function createUserProfile(uid: string, data: {
+  username: string;
+  email?: string | null;
+  displayName?: string | null;
+  photoURL?: string | null;
+  provider: string;
+}): Promise<void> {
+  const userRef = doc(db, 'users', uid);
+  
+  try {
+    await setDoc(userRef, {
+      ...data,
+      bestScore: 0,
+      gamesPlayed: 0,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    });
+    
+    // Try to register the username
+    if (data.username) {
+      const success = await registerUsername(data.username, uid);
+      if (!success) {
+        // If username is taken, add a number
+        for (let i = 1; i <= 99; i++) {
+          const altUsername = `${data.username}${i}`;
+          const altSuccess = await registerUsername(altUsername, uid);
+          if (altSuccess) {
+            // Update user record with the modified username
+            await updateDoc(userRef, { username: altUsername });
+            break;
+          }
+        }
+      }
+    }
+    
+    console.log('[AUTH] User profile created successfully');
+  } catch (error) {
+    console.error('[AUTH] Failed to create user profile:', error);
+    throw error;
+  }
+}
+
+// Get current user's profile
+export async function getUserProfile(uid?: string): Promise<any | null> {
+  const userId = uid || auth.currentUser?.uid;
+  if (!userId) return null;
+  
+  try {
+    const userRef = doc(db, 'users', userId);
+    const userSnap = await getDoc(userRef);
+    
+    if (userSnap.exists()) {
+      return { id: userId, ...userSnap.data() };
+    }
+    return null;
+  } catch (error) {
+    console.error('[AUTH] Failed to get user profile:', error);
+    return null;
+  }
+}
+
+// Update user profile
+export async function updateUserProfile(updates: {
+  displayName?: string;
+  photoURL?: string;
+  username?: string;
+}): Promise<boolean> {
+  const user = auth.currentUser;
+  if (!user) return false;
+  
+  try {
+    // Update Firebase Auth profile
+    if (updates.displayName !== undefined || updates.photoURL !== undefined) {
+      await updateProfile(user, {
+        displayName: updates.displayName,
+        photoURL: updates.photoURL
+      });
+    }
+    
+    // Update Firestore profile
+    const userRef = doc(db, 'users', user.uid);
+    const firestoreUpdates: any = {
+      updatedAt: Date.now()
+    };
+    
+    if (updates.displayName !== undefined) {
+      firestoreUpdates.displayName = updates.displayName;
+    }
+    if (updates.photoURL !== undefined) {
+      firestoreUpdates.photoURL = updates.photoURL;
+    }
+    if (updates.username !== undefined) {
+      firestoreUpdates.username = updates.username;
+    }
+    
+    await updateDoc(userRef, firestoreUpdates);
+    console.log('[AUTH] User profile updated successfully');
+    return true;
+  } catch (error) {
+    console.error('[AUTH] Failed to update user profile:', error);
+    return false;
+  }
 }
 
 export function sanitizeUsername(raw: string) {

@@ -1,7 +1,27 @@
 import React, { useEffect, useRef, useState } from "react";
-import { ensureAnonAuth, claimUsername, submitScore, fetchTop, fetchSelfRank, type LeaderboardEntry, subscribeTop, changeUsername, subscribeSelfRank, getUserBest, sanitizeUsername, validateCachedUsername, registerUsername } from './firebase.js';
+import { 
+  ensureAnonAuth, 
+  submitScore, 
+  fetchTop, 
+  fetchSelfRank, 
+  type LeaderboardEntry, 
+  subscribeTop, 
+  subscribeSelfRank, 
+  getUserBest, 
+  sanitizeUsername,
+  auth,
+  AuthResult,
+  getUserProfile,
+  signOutUser
+} from './firebase.js';
+import { User } from 'firebase/auth';
 import { createObstacleSystem } from './obstacleSystem.js';
 import PreviewScreen from './PreviewScreen.js';
+import MenuScreen from './MenuScreen.js';
+import LeaderboardScreen from './LeaderboardScreen.js';
+import SettingsScreen from './SettingsScreen.js';
+import AuthScreen from './AuthScreen.js';
+import UserProfile from './UserProfile.js';
 
 // Neon phase color pairs (bg = SOLID color, accent = GHOST color). All bright for contrast on dark playfield.
 const colorCombos: { bg: string; accent: string }[] = [
@@ -48,20 +68,24 @@ export default function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   // Theme state (bg = SOLID phase color, accent = GHOST phase color)
   const [theme, setTheme] = useState(() => colorCombos[Math.floor(Math.random()*colorCombos.length)]);
-  const [gameState, setGameState] = useState<"MENU" | "RUN" | "GAMEOVER" | "PREVIEW">("MENU");
+  const [gameState, setGameState] = useState<"MENU" | "RUN" | "GAMEOVER" | "PREVIEW" | "LEADERBOARD" | "SETTINGS">("MENU");
   const [score, setScore] = useState(0);
   const [best, setBest] = useState(0);
   const [phase, setPhase] = useState<"SOLID" | "GHOST">("SOLID");
   const [cooldown, setCooldown] = useState(0);
-  const [username, setUsername] = useState<string | null>(null);
+  // Enhanced authentication state
+  const [user, setUser] = useState<User | null>(null);
+  const [userProfile, setUserProfile] = useState<any>(null);
+  const [showAuthScreen, setShowAuthScreen] = useState(false);
+  const [authLoading, setAuthLoading] = useState(true);
   const [liveTop, setLiveTop] = useState<LeaderboardEntry[]>([]);
   const [selfRankLive, setSelfRankLive] = useState<{ rank: number; bestScore: number } | null>(null);
   const [changing, setChanging] = useState(false);
-  const [showNameModal, setShowNameModal] = useState(false);
-  const [nameMode, setNameMode] = useState<'claim' | 'change'>('claim');
-  const [nameInput, setNameInput] = useState('');
-  const [nameError, setNameError] = useState<string | null>(null);
-  const [nameBusy, setNameBusy] = useState(false);
+
+  // Mobile/touch controls
+  const [controlMode, setControlMode] = useState<'drag' | 'tilt'>('drag');
+  const [activeTouches, setActiveTouches] = useState<{ [id: number]: { x: number; y: number; type: 'move' | 'phase' } }>({});
+  const deviceOrientationRef = useRef<{ beta: number; gamma: number } | null>(null);
   const leaderboardRef = useRef<LeaderboardEntry[]>([]);
   const selfRankRef = useRef<{ rank: number; bestScore: number } | null>(null);
   const rafRef = useRef(0);
@@ -98,7 +122,7 @@ export default function App() {
   }
 
   function startGame() {
-    if (showNameModal) return; // Don't start while modal open
+    if (showAuthScreen) return; // Don't start while auth screen open
     pickNewTheme(); // One random theme per round start only (affects player + orbs)
     resetWorld();
     setGameState("RUN");
@@ -284,96 +308,538 @@ export default function App() {
     rafRef.current = requestAnimationFrame(step as any); return ()=> cancelAnimationFrame(rafRef.current);
   }, [gameState, phase, cooldown, score, best, theme, showDebug]);
 
-  // Firebase & leaderboard logic (unchanged)
-  useEffect(() => { let mounted = true; (async () => { try { await ensureAnonAuth(); const cached = localStorage.getItem('spr_username'); if(cached){ const ok = await validateCachedUsername(cached); if(ok){ if(!mounted) return; setUsername(cached); const b = await getUserBest(); if(mounted) setBest(b); refreshLeaderboard(); return; } else { localStorage.removeItem('spr_username'); } } if(mounted){ setShowNameModal(true); setNameMode('claim'); } } catch(e){} })(); return ()=>{ mounted=false; }; }, []);
-  useEffect(()=>{ const unsub = subscribeTop(10,(entries:LeaderboardEntry[])=>setLiveTop(entries)); return ()=>unsub(); },[]);
-  useEffect(()=>{ const unsub = subscribeSelfRank(r=> setSelfRankLive(r)); return ()=>{ try{unsub();}catch{} }; },[]);
-  function refreshLeaderboard(){ fetchTop().then((ls:LeaderboardEntry[])=>{ leaderboardRef.current = ls; }); fetchSelfRank().then((r:{rank:number;bestScore:number}|null)=>{ selfRankRef.current = r; if(r && r.bestScore>best) setBest(r.bestScore); }); }
-  useEffect(()=>{ if(gameState==='GAMEOVER'){ submitScore(score).then(updated=>{ if(typeof updated==='number') setBest(updated); refreshLeaderboard(); }); } },[gameState,score]);
+  // Enhanced authentication setup
+  useEffect(() => {
+    let mounted = true;
+    
+    const unsubscribe = auth.onAuthStateChanged(async (firebaseUser) => {
+      if (!mounted) return;
+      
+      setAuthLoading(true);
+      
+      if (firebaseUser) {
+        setUser(firebaseUser);
+        
+        // Load user profile
+        try {
+          const profile = await getUserProfile(firebaseUser.uid);
+          if (mounted) {
+            setUserProfile(profile);
+            if (profile?.bestScore) {
+              setBest(profile.bestScore);
+            }
+          }
+        } catch (error) {
+          console.error('Failed to load user profile:', error);
+        }
+      } else {
+        // No user signed in, sign in anonymously
+        try {
+          await ensureAnonAuth();
+        } catch (error) {
+          console.error('Anonymous auth failed:', error);
+        }
+      }
+      
+      if (mounted) {
+        setAuthLoading(false);
+        refreshLeaderboard();
+      }
+    });
+    
+    return () => {
+      mounted = false;
+      unsubscribe();
+    };
+  }, []);
 
-  async function handleNameSubmit(){ setNameError(null); const cleaned = sanitizeUsername(nameInput); if(cleaned.length<3){ setNameError('Min 3 chars, a-z 0-9 _'); return; } setNameBusy(true); try { await ensureAnonAuth(); const uid = (await ensureAnonAuth()).uid; const ok = await registerUsername(cleaned, uid); if(!ok){ setNameError('Taken or failed. Try another.'); return; } setUsername(cleaned); setShowNameModal(false); const b = await getUserBest(); setBest(b); refreshLeaderboard(); } finally { setNameBusy(false); } }
-  async function onChangeUsername(){ setNameMode('change'); setNameInput(username||''); setNameError(null); setShowNameModal(true); }
+  // Authentication handlers
+  const handleAuthSuccess = async (result: AuthResult) => {
+    setShowAuthScreen(false);
+    setUser(result.user);
+    
+    try {
+      const profile = await getUserProfile(result.user.uid);
+      setUserProfile(profile);
+      if (profile?.bestScore) {
+        setBest(profile.bestScore);
+      }
+      refreshLeaderboard();
+    } catch (error) {
+      console.error('Failed to load profile after auth:', error);
+    }
+  };
 
-  useEffect(()=>{ function handleKey(e:KeyboardEvent){ if(e && e.code==='Space') e.preventDefault(); if(e.key === 'D' || e.key === 'd') { setShowDebug(d => !d); return; } if(showNameModal) return; if(gameState==='MENU'){ startGame(); return; } if(gameState==='GAMEOVER'){ startGame(); return; } if(gameState!=='RUN') return; if(cooldown>0) return; setPhase(p=> p==='SOLID'? 'GHOST':'SOLID'); setCooldown(300); }
+  const handleSignOut = async () => {
+    try {
+      await signOutUser();
+      setUser(null);
+      setUserProfile(null);
+      setBest(0);
+      // Will automatically sign in anonymously via onAuthStateChanged
+    } catch (error) {
+      console.error('Sign out failed:', error);
+    }
+  };
+
+  // Leaderboard subscriptions
+  useEffect(() => {
+    const unsub = subscribeTop(10, (entries: LeaderboardEntry[]) => setLiveTop(entries));
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    const unsub = subscribeSelfRank(r => setSelfRankLive(r));
+    return () => {
+      try { unsub(); } catch {}
+    };
+  }, []);
+
+  function refreshLeaderboard() {
+    fetchTop().then((ls: LeaderboardEntry[]) => {
+      leaderboardRef.current = ls;
+    });
+    fetchSelfRank().then((r: { rank: number; bestScore: number } | null) => {
+      selfRankRef.current = r;
+      if (r && r.bestScore > best) setBest(r.bestScore);
+    });
+  }
+
+  // Submit score when game ends
+  useEffect(() => {
+    if (gameState === 'GAMEOVER') {
+      submitScore(score).then(updated => {
+        if (typeof updated === 'number') setBest(updated);
+        refreshLeaderboard();
+      });
+    }
+  }, [gameState, score]);
+
+  // ...existing code...
+
+  useEffect(()=>{ 
+    function handleKey(e:KeyboardEvent){ 
+      // Prevent default for space and arrow keys to avoid page scrolling
+      if(e.code==='Space' || e.code==='ArrowLeft' || e.code==='ArrowRight') {
+        e.preventDefault(); 
+      }
+      
+      // Debug toggle (works in any state)
+      if(e.key === 'D' || e.key === 'd') { 
+        setShowDebug(d => !d); 
+        return; 
+      } 
+      
+      // Don't handle other keys when auth screen is open
+      if(showAuthScreen) return; 
+      
+      // Navigation keys for menu states
+      if(gameState === 'LEADERBOARD' || gameState === 'SETTINGS' || gameState === 'PREVIEW') {
+        if(e.key === 'Escape') {
+          setGameState('MENU');
+          return;
+        }
+      }
+      
+      // Menu state: space or enter starts game
+      if(gameState==='MENU'){ 
+        if(e.code==='Space' || e.code==='Enter') {
+          startGame(); 
+          return; 
+        }
+      } 
+      
+      // Game over state: space or enter restarts game
+      if(gameState==='GAMEOVER'){ 
+        if(e.code==='Space' || e.code==='Enter') {
+          startGame(); 
+          return; 
+        }
+      } 
+      
+      // Running state: handle game controls
+      if(gameState!=='RUN') return; 
+      
+      // Phase switching
+      if(e.code==='Space' && cooldown===0) {
+        setPhase(p=> p==='SOLID'? 'GHOST':'SOLID'); 
+        setCooldown(300); 
+        return;
+      }
+      
+      // Arrow key movement for desktop
+      if(e.code==='ArrowLeft') {
+        player.current.x = Math.max(player.current.r+8, player.current.x - 15);
+      }
+      if(e.code==='ArrowRight') {
+        player.current.x = Math.min(420 - player.current.r - 8, player.current.x + 15);
+      }
+    }
+    
     function clamp(x:number,a:number,b:number){ return Math.max(a, Math.min(b,x)); }
-    function pointerPos(e:PointerEvent|TouchEvent|any){ const rect = canvasRef.current!.getBoundingClientRect(); const cx = (e.clientX ?? e.touches?.[0]?.clientX) - rect.left; const cy = (e.clientY ?? e.touches?.[0]?.clientY) - rect.top; return {x:cx,y:cy}; }
-    function onPointerDown(e:any){ if(showNameModal) return; const {x,y} = pointerPos(e); dragRef.current = { active:true,startX:x,startY:y,moved:false,t0:performance.now() }; if(gameState==='MENU'){ startGame(); return; } if(gameState==='GAMEOVER'){ startGame(); return; } }
-    function onPointerMove(e:any){ if(!dragRef.current.active) return; const {x} = pointerPos(e); const dx = x - dragRef.current.startX; if(Math.abs(dx)>6) dragRef.current.moved = true; player.current.x = clamp(x, player.current.r+8, 420 - player.current.r - 8); }
-    function onPointerUp(){ if(!dragRef.current.active) return; const wasTap = !dragRef.current.moved && performance.now() - dragRef.current.t0 < 220; dragRef.current.active = false; if(gameState!=='RUN') return; if(wasTap && cooldown===0){ setPhase(p=> p==='SOLID'? 'GHOST':'SOLID'); setCooldown(300); } }
-    window.addEventListener('keydown', handleKey as any); const cEl = canvasRef.current!; cEl.addEventListener('pointerdown', onPointerDown,{passive:false} as any); cEl.addEventListener('pointermove', onPointerMove,{passive:false} as any); cEl.addEventListener('pointerup', onPointerUp,{passive:false} as any); cEl.addEventListener('pointercancel', onPointerUp,{passive:false} as any); cEl.addEventListener('pointerleave', onPointerUp,{passive:false} as any); return ()=>{ window.removeEventListener('keydown', handleKey as any); cEl.removeEventListener('pointerdown', onPointerDown as any); cEl.removeEventListener('pointermove', onPointerMove as any); cEl.removeEventListener('pointerup', onPointerUp as any); cEl.removeEventListener('pointercancel', onPointerUp as any); cEl.removeEventListener('pointerleave', onPointerUp as any); };
-  },[gameState,cooldown,showNameModal]);
+    
+    function pointerPos(e:PointerEvent|TouchEvent|any){ 
+      const rect = canvasRef.current!.getBoundingClientRect(); 
+      const cx = (e.clientX ?? e.touches?.[0]?.clientX) - rect.left; 
+      const cy = (e.clientY ?? e.touches?.[0]?.clientY) - rect.top; 
+      return {x:cx,y:cy}; 
+    }
+    
+    function onPointerDown(e:any){ 
+      if(showAuthScreen) return; 
+      e.preventDefault?.();
+      
+      const {x,y} = pointerPos(e); 
+      
+      // Always allow phase switching on any touch in RUN mode
+      if(gameState === 'RUN' && cooldown === 0) {
+        setPhase(p=> p==='SOLID'? 'GHOST':'SOLID'); 
+        setCooldown(300);
+      }
+      
+      // Handle movement based on control mode
+      if(controlMode === 'drag') {
+        // Update active touches for multi-touch support
+        setActiveTouches(prev => ({
+          ...prev,
+          [e.pointerId || 0]: { x, y, type: 'move' }
+        }));
+        
+        dragRef.current = { 
+          active:true,
+          startX:x,
+          startY:y,
+          moved:false,
+          t0:performance.now() 
+        }; 
+      }
+      
+      if(gameState==='MENU'){ startGame(); return; } 
+      if(gameState==='GAMEOVER'){ startGame(); return; } 
+    }
+    
+    function onPointerMove(e:any){ 
+      if(!dragRef.current.active || showAuthScreen) return; 
+      e.preventDefault?.();
+      
+      const {x} = pointerPos(e); 
+      const pointerId = e.pointerId || 0;
+      
+      if(controlMode === 'drag' && activeTouches[pointerId]) {
+        // Update touch position
+        setActiveTouches(prev => ({
+          ...prev,
+          [pointerId]: { ...prev[pointerId], x, y: pointerPos(e).y }
+        }));
+        
+        const dx = x - dragRef.current.startX; 
+        if(Math.abs(dx)>6) dragRef.current.moved = true; 
+        player.current.x = clamp(x, player.current.r+8, 420 - player.current.r - 8); 
+      }
+    }
+    
+    function onPointerUp(e:any){ 
+      e.preventDefault?.();
+      const pointerId = e.pointerId || 0;
+      
+      // Remove from active touches
+      setActiveTouches(prev => {
+        const newTouches = { ...prev };
+        delete newTouches[pointerId];
+        return newTouches;
+      });
+      
+      if(!dragRef.current.active) return; 
+      dragRef.current.active = false; 
+    }
+
+    // Device orientation for tilt controls
+    function handleOrientation(e: DeviceOrientationEvent) {
+      if(controlMode === 'tilt' && gameState === 'RUN') {
+        deviceOrientationRef.current = {
+          beta: e.beta || 0,
+          gamma: e.gamma || 0
+        };
+        
+        // Use gamma (left/right tilt) for horizontal movement
+        const tiltSensitivity = 4;
+        const tiltX = (e.gamma || 0) * tiltSensitivity;
+        const newX = clamp(player.current.x + tiltX, player.current.r+8, 420 - player.current.r - 8);
+        player.current.x = newX;
+      }
+    }
+
+    window.addEventListener('keydown', handleKey as any); 
+    
+    // Only add canvas event listeners if canvas exists (i.e., when in game state)
+    const cEl = canvasRef.current;
+    if (cEl) {
+      cEl.addEventListener('pointerdown', onPointerDown,{passive:false} as any); 
+      cEl.addEventListener('pointermove', onPointerMove,{passive:false} as any); 
+      cEl.addEventListener('pointerup', onPointerUp,{passive:false} as any); 
+      cEl.addEventListener('pointercancel', onPointerUp,{passive:false} as any); 
+      cEl.addEventListener('pointerleave', onPointerUp,{passive:false} as any); 
+    }
+    
+    // Add device orientation listener for tilt controls
+    if(window.DeviceOrientationEvent) {
+      // Check for iOS permission requirement
+      if(typeof (DeviceOrientationEvent as any).requestPermission === 'function') {
+        // iOS requires permission
+        (DeviceOrientationEvent as any).requestPermission().then((response: string) => {
+          if (response === 'granted') {
+            window.addEventListener('deviceorientation', handleOrientation);
+          }
+        });
+      } else {
+        // Android and older browsers
+        window.addEventListener('deviceorientation', handleOrientation);
+      }
+    }
+    
+    return ()=>{ 
+      window.removeEventListener('keydown', handleKey as any); 
+      
+      // Only remove canvas event listeners if canvas exists
+      const cEl = canvasRef.current;
+      if (cEl) {
+        cEl.removeEventListener('pointerdown', onPointerDown as any); 
+        cEl.removeEventListener('pointermove', onPointerMove as any); 
+        cEl.removeEventListener('pointerup', onPointerUp as any); 
+        cEl.removeEventListener('pointercancel', onPointerUp as any); 
+        cEl.removeEventListener('pointerleave', onPointerUp as any); 
+      }
+      
+      if(window.DeviceOrientationEvent) {
+        window.removeEventListener('deviceorientation', handleOrientation);
+      }
+    };
+  },[gameState,cooldown,showAuthScreen,controlMode,activeTouches]);
+
+  // Load control mode from localStorage
+  useEffect(() => {
+    const savedControlMode = localStorage.getItem('spr_control_mode') as 'drag' | 'tilt' | null;
+    if (savedControlMode) setControlMode(savedControlMode);
+  }, []);
 
   return (
-    <div className="container" style={{display:'flex', flexDirection:'row', justifyContent:'center', gap:32, alignItems:'flex-start', padding:16, background:'transparent'}}>
-      <aside style={{width:240, fontFamily:'system-ui,-apple-system,Segoe UI,Roboto', color:'#fff'}}>
-        <h1 style={{fontSize:22, margin:'0 0 8px'}}>
-          <span style={{color:'#ffffff'}}>Shadow Phase Runner</span>
-        </h1>
-        <div style={{margin:'6px 0 12px', fontSize:11, display:'flex', flexDirection:'column', gap:6}}>
-          <div style={{display:'flex', gap:6}}>
-            <button style={{flex:1, background: showDebug? '#0affff':'#1e1e1e', color: showDebug? '#000':'#fff', border:'1px solid #444', borderRadius:4, fontSize:11, padding:'4px 6px', cursor:'pointer'}} onClick={()=> setShowDebug(d=>!d)}>Debug {showDebug? 'On':'Off'}</button>
-          </div>
-          <div style={{display:'flex', gap:6}}>
-            <button style={{flex:1, background:'#1e1e1e', color:'#fff', border:'1px solid #444', borderRadius:4, fontSize:11, padding:'4px 6px', cursor:'pointer'}} onClick={()=> setGameState('PREVIEW')}>Preview Obstacles</button>
-          </div>
-        </div>
-        <div style={{fontSize:13, lineHeight:'1.4', opacity:0.9, marginBottom:12}}>
-          <div>Tap / Space: phase</div>
-          <div>Drag: move</div>
-          <div>Collect orbs, avoid wrong phase</div>
-        </div>
-        <div style={{fontSize:13, marginBottom:8, opacity:0.85}}>
-          {username ? `You: ${username}` : 'Claiming username...'} {selfRankLive && `• Rank #${selfRankLive.rank}`}
-        </div>
-        <button onClick={onChangeUsername} disabled={changing} style={{fontSize:12, padding:'4px 10px', cursor:'pointer', borderRadius:4, border:'1px solid #555', background:'#1e1e1e', color:'#fff'}}>Change Name</button>
-        <div style={{marginTop:24, fontSize:12, opacity:0.6}}>High Score: {best}</div>
-      </aside>
-      <div style={{position:'relative'}}>
-        <canvas ref={canvasRef} width={W} height={H} style={{borderRadius:16, boxShadow:'0 8px 30px rgba(0,0,0,0.35)', border:'1px solid rgba(255,255,255,0.1)'}} />
-      </div>
-      <aside style={{width:240, fontFamily:'system-ui, -apple-system, Segoe UI, Roboto', color:'#fff', position:'sticky', top:16}}>
-        <h2 style={{fontSize:20, margin:'0 0 12px'}}>Top 10</h2>
-        <ol style={{listStyle:'none', padding:0, margin:0, fontSize:14, lineHeight:'1.5em'}}>
-          {liveTop.length === 0 && <li style={{opacity:0.6}}>{username? 'No scores yet (play!)':'Loading...'}</li>}
-          {liveTop.map((e,i) => (
-            <li key={e.username} style={{display:'flex', justifyContent:'space-between', background:'rgba(255,255,255,0.05)', padding:'3px 8px', borderRadius:4, marginBottom:4, border: username===e.username? `1px solid ${UI_ACCENT}`:'1px solid transparent'}}>
-              <span>{i+1}. {e.username}</span>
-              <span style={{opacity:0.85}}>{e.bestScore}</span>
-            </li>
-          ))}
-        </ol>
-        {selfRankLive && selfRankLive.rank > 10 && (
-          <div style={{marginTop:12, fontSize:12, opacity:0.85}}>Your Rank: #{selfRankLive.rank} • Best {selfRankLive.bestScore}</div>
-        )}
-        {username && !liveTop.find(e=>e.username===username) && liveTop.length>0 && (
-          <div style={{marginTop:8, fontSize:12, opacity:0.65}}>Score more to enter Top 10!</div>
-        )}
-      </aside>
-      {showNameModal && (
-        <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.55)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000}}>
-          <div style={{background:'#14171c', padding:'24px 28px', borderRadius:12, width:320, boxShadow:'0 8px 30px rgba(0,0,0,0.4)', fontFamily:'system-ui,-apple-system,Segoe UI,Roboto', color:'#fff'}}>
-            <h3 style={{margin:'0 0 12px', fontSize:18}}>{nameMode === 'claim' ? 'Choose a Username' : 'Change Username'}</h3>
-            <p style={{margin:'0 0 12px', fontSize:13, opacity:0.8}}>
-              {nameMode === 'claim' ? 'Pick a unique name or your existing username.' : 'Enter a new unique name.'}
-            </p>
-            <input
-              autoFocus
-              value={nameInput}
-              onChange={e => { setNameInput(e.target.value); setNameError(null); }}
-              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleNameSubmit(); } }}
-              placeholder="username"
-              style={{width:'100%', padding:'8px 10px', borderRadius:6, background:'#1f2329', border:'1px solid #333', color:'#fff', fontSize:14, outline:'none'}}
-            />
-            {nameError && <div style={{marginTop:8, fontSize:12, color:'#ff5d5d'}}>{nameError}</div>}
-            <div style={{display:'flex', gap:8, marginTop:18}}>
-              <button disabled={nameBusy} onClick={()=>{ setShowNameModal(false); if(!username){ setNameMode('claim'); } }} style={{flex:1, background:'none', border:'1px solid #444', color:'#ddd', padding:'8px 0', borderRadius:6, cursor:'pointer', fontSize:13}}>Cancel</button>
-              <button disabled={nameBusy} onClick={handleNameSubmit} style={{flex:1, background:UI_ACCENT, border:'1px solid #1d4ed8', color:'#000', padding:'8px 0', borderRadius:6, cursor:'pointer', fontSize:13, fontWeight:600}}>{nameBusy? 'Saving...' : (nameMode==='claim'?'Save':'Update')}</button>
+    <div style={{ 
+      width: '100vw', 
+      height: '100vh', 
+      overflow: 'hidden',
+      fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+    }}>
+      {/* Menu Screen */}
+      {gameState === 'MENU' && (
+        <MenuScreen
+          theme={theme}
+          username={userProfile?.username || (user?.isAnonymous ? null : user?.displayName) || null}
+          onPlay={() => startGame()}
+          onLeaderboard={() => setGameState('LEADERBOARD')}
+          onPreview={() => setGameState('PREVIEW')}
+          onSettings={() => setGameState('SETTINGS')}
+          onChangeName={() => setShowAuthScreen(true)}
+        />
+      )}
+
+      {/* Game Screen */}
+      {(gameState === 'RUN' || gameState === 'GAMEOVER') && (
+        <div style={{ 
+          position: 'relative', 
+          width: '100%', 
+          height: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: 'linear-gradient(135deg, #0b0f14 0%, #1a1a2e 100%)'
+        }}>
+          {/* Game Canvas */}
+          <canvas 
+            ref={canvasRef} 
+            width={W} 
+            height={H} 
+            style={{
+              maxWidth: '100vw',
+              maxHeight: '100vh',
+              width: 'auto',
+              height: 'auto',
+              borderRadius: window.innerWidth > 768 ? '16px' : '0',
+              boxShadow: window.innerWidth > 768 ? '0 8px 30px rgba(0,0,0,0.35)' : 'none',
+              border: window.innerWidth > 768 ? '1px solid rgba(255,255,255,0.1)' : 'none'
+            }} 
+          />
+
+          {/* Mobile UI Overlay */}
+          {window.innerWidth <= 768 && (
+            <div style={{
+              position: 'absolute',
+              top: '20px',
+              left: '20px',
+              right: '20px',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'flex-start',
+              pointerEvents: 'none',
+              zIndex: 100
+            }}>
+              {/* Score Display */}
+              <div style={{
+                background: 'rgba(0,0,0,0.7)',
+                color: 'white',
+                padding: '8px 12px',
+                borderRadius: '8px',
+                fontSize: '16px',
+                fontWeight: 600
+              }}>
+                Score: {score}
+              </div>
+
+              {/* Phase Display */}
+              <div style={{
+                background: phase === 'SOLID' ? theme.bg : theme.accent,
+                color: phase === 'SOLID' ? '#fff' : '#000',
+                padding: '8px 12px',
+                borderRadius: '8px',
+                fontSize: '14px',
+                fontWeight: 600,
+                opacity: cooldown > 0 ? 0.5 : 1
+              }}>
+                {phase}
+              </div>
             </div>
-          </div>
+          )}
+
+          {/* Desktop Sidebar - only show on larger screens */}
+          {window.innerWidth > 768 && (
+            <>
+              {/* Left Sidebar */}
+              <aside style={{
+                position: 'absolute',
+                left: '20px',
+                top: '20px',
+                width: '240px',
+                color: '#fff'
+              }}>
+                <h1 style={{fontSize:22, margin:'0 0 8px'}}>
+                  <span style={{color:'#ffffff'}}>Shadow Phase Runner</span>
+                </h1>
+                <div style={{fontSize:13, lineHeight:'1.4', opacity:0.9, marginBottom:12}}>
+                  <div>Tap / Space: phase</div>
+                  <div>Drag: move</div>
+                  <div>Collect orbs, avoid wrong phase</div>
+                </div>
+                <div style={{fontSize:13, marginBottom:8, opacity:0.85}}>
+                  {userProfile?.username ? `You: ${userProfile.username}` : (user?.isAnonymous ? 'Playing as guest' : user?.displayName || 'Loading...')} {selfRankLive && `• Rank #${selfRankLive.rank}`}
+                </div>
+                
+                {/* User Profile Component */}
+                <UserProfile 
+                  user={user!}
+                  onSignOut={handleSignOut}
+                  onShowAuth={() => setShowAuthScreen(true)}
+                />
+                <div style={{marginTop:24, fontSize:12, opacity:0.6}}>High Score: {best}</div>
+              </aside>
+
+              {/* Right Sidebar */}
+              <aside style={{
+                position: 'absolute',
+                right: '20px',
+                top: '20px',
+                width: '240px',
+                color: '#fff'
+              }}>
+                <h2 style={{fontSize:20, margin:'0 0 12px'}}>Top 10</h2>
+                <ol style={{listStyle:'none', padding:0, margin:0, fontSize:14, lineHeight:'1.5em'}}>
+                  {liveTop.length === 0 && <li style={{opacity:0.6}}>{userProfile?.username ? 'No scores yet (play!)' : 'Loading...'}</li>}
+                  {liveTop.map((e,i) => (
+                    <li key={e.username} style={{
+                      display:'flex', 
+                      justifyContent:'space-between', 
+                      background:'rgba(255,255,255,0.05)', 
+                      padding:'3px 8px', 
+                      borderRadius:4, 
+                      marginBottom:4, 
+                      border: userProfile?.username === e.username ? `1px solid ${UI_ACCENT}` : '1px solid transparent'
+                    }}>
+                      <span>{i+1}. {e.username}</span>
+                      <span style={{opacity:0.85}}>{e.bestScore}</span>
+                    </li>
+                  ))}
+                </ol>
+                {selfRankLive && selfRankLive.rank > 10 && (
+                  <div style={{marginTop:12, fontSize:12, opacity:0.85}}>Your Rank: #{selfRankLive.rank} • Best {selfRankLive.bestScore}</div>
+                )}
+                {userProfile?.username && !liveTop.find(e => e.username === userProfile.username) && liveTop.length > 0 && (
+                  <div style={{marginTop:8, fontSize:12, opacity:0.65}}>Score more to enter Top 10!</div>
+                )}
+              </aside>
+            </>
+          )}
+
+          {/* Back to Menu Button (mobile) */}
+          {window.innerWidth <= 768 && gameState === 'GAMEOVER' && (
+            <div style={{
+              position: 'absolute',
+              bottom: '30px',
+              left: '20px',
+              right: '20px',
+              display: 'flex',
+              justifyContent: 'center'
+            }}>
+              <button
+                onClick={() => setGameState('MENU')}
+                style={{
+                  background: theme.accent,
+                  color: '#000',
+                  border: 'none',
+                  padding: '12px 24px',
+                  borderRadius: '8px',
+                  fontSize: '16px',
+                  fontWeight: 600,
+                  cursor: 'pointer'
+                }}
+              >
+                Back to Menu
+              </button>
+            </div>
+          )}
         </div>
       )}
+
+      {/* Leaderboard Screen */}
+      {gameState === 'LEADERBOARD' && (
+        <LeaderboardScreen
+          theme={theme}
+          leaderboard={liveTop}
+          selfRank={selfRankLive}
+          username={userProfile?.username || null}
+          onBack={() => setGameState('MENU')}
+        />
+      )}
+
+      {/* Settings Screen */}
+      {gameState === 'SETTINGS' && (
+        <SettingsScreen
+          theme={theme}
+          onBack={() => setGameState('MENU')}
+        />
+      )}
+
+      {/* Preview Screen */}
       {gameState === 'PREVIEW' && (
-        <PreviewScreen theme={theme} onBack={() => setGameState('MENU')} />
+        <PreviewScreen 
+          theme={theme} 
+          onBack={() => setGameState('MENU')} 
+        />
+      )}
+
+      {/* Authentication Screen */}
+      {showAuthScreen && (
+        <AuthScreen
+          onAuthSuccess={handleAuthSuccess}
+          onClose={() => setShowAuthScreen(false)}
+        />
       )}
     </div>
   );
